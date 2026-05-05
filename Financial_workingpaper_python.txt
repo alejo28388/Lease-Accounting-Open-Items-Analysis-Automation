@@ -1,0 +1,84 @@
+import win32com.client
+import pdb 
+import xlwings as xw
+from datetime import datetime
+import pandas as pd
+
+def fbl3n_export():
+
+    SapGuiAuto = win32com.client.GetObject("SAPGUI")
+    application = SapGuiAuto.GetScriptingEngine
+    connection = application.Children(0)
+    session = connection.Children(0)
+
+    wb = xw.Book(r"C:\Users\acanolop\Desktop\Macros_created_by_me\FBL3N_parameters_openitems.xlsx")
+    ws = wb.sheets["Sheet1"]
+    last_row_accounts = ws.range(f"A{ws.cells.last_cell.row}").end("up").row
+    last_row_company_codes = ws.range(f"B{ws.cells.last_cell.row}").end("up").row
+    date = ws.range("C2").api.Text
+
+    sap_window_title = session.findById("wnd[0]").text
+    shell = win32com.client.Dispatch("WScript.Shell")
+    shell.AppActivate(sap_window_title)
+
+    #pdb.set_trace()
+    session.findById("wnd[0]").maximize()
+    session.findById("wnd[0]/tbar[0]/okcd").text = "fbl3n"
+    session.findById("wnd[0]").sendVKey(0)
+    session.findById("wnd[0]/usr/btn%_SD_SAKNR_%_APP_%-VALU_PUSH").press() #select GL accounts
+
+    ws.range(f"A2:A{last_row_accounts}").copy() 
+
+    session.findById("wnd[1]/tbar[0]/btn[16]").press()
+    session.findById("wnd[1]/tbar[0]/btn[24]").press() #paste GL accounts
+    session.findById("wnd[1]/tbar[0]/btn[8]").press() #execute
+    session.findById("wnd[0]/usr/btn%_SD_BUKRS_%_APP_%-VALU_PUSH").press() #select company codes
+
+    ws.range(f"B2:B{last_row_company_codes}").copy() 
+    
+    session.findById("wnd[1]/tbar[0]/btn[16]").press()
+    session.findById("wnd[1]/tbar[0]/btn[24]").press() #paste company codes
+    session.findById("wnd[1]/tbar[0]/btn[8]").press() #execute
+    session.findById("wnd[0]/usr/ctxtPA_STIDA").text = date
+    session.findById("wnd[0]/tbar[1]/btn[8]").press()
+    session.findById("wnd[0]/mbar/menu[0]/menu[3]/menu[2]").select()
+    session.findById("wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[1,0]").select()
+    session.findById("wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150/radSPOPLI-SELFLAG[1,0]").setFocus()
+    session.findById("wnd[1]/tbar[0]/btn[0]").press()
+    folder = r"C:\Users\acanolop\Downloads"
+    session.findById("wnd[1]/usr/ctxtDY_PATH").text = folder
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"FBL3N_data{timestamp}.xls"
+    session.findById("wnd[1]/usr/ctxtDY_FILENAME").text = filename
+    session.findById("wnd[1]/tbar[0]/btn[0]").press()
+
+    return folder + "\\" + filename
+
+def process_data():
+    filename = fbl3n_export()
+    wb = xw.Book(filename)
+    ws = wb.sheets[0]
+    ws.range("9:9").delete()
+    ws.range("E:E").delete()
+    df = ws.range("C8").options(pd.DataFrame, expand="table").value
+
+    df.columns = df.columns.str.strip()
+
+    pivot_df = df.pivot_table(
+        index="Text",
+        values="LC amnt",
+        aggfunc="sum"
+    ).reset_index()
+
+    pivot_df = pivot_df[pivot_df["LC amnt"] != 0]
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ruta_salida = rf"C:\Users\acanolop\Downloads\lease_open_items_{timestamp}.xlsx"
+
+    with pd.ExcelWriter(ruta_salida, engine="xlsxwriter") as writer:
+        df.to_excel(writer, sheet_name="Detalle", index=False)
+        pivot_df.to_excel(writer, sheet_name="Resumen", index=False)
+
+    print(f"✅ Archivo generado en: {ruta_salida}")
+
+process_data()

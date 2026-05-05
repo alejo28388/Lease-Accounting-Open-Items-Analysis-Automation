@@ -1,0 +1,252 @@
+Sub DescargarSAP_NonRec_workingpapers()
+    ' Declaración de variables para SAP
+    Dim SapGuiAuto As Object
+    Dim Application As Object
+    Dim Connection As Object
+    Dim Session As Object
+    
+    ' Variables para datos de usuario y rutas
+    Dim usuario As String
+    Dim password As String
+    Dim Ruta As String
+    Dim Archivo As String
+    
+    ' 1) CONFIGURACIÓN DE DESTINO
+    ' Asegúrate de que la ruta termine en \
+    Ruta = Environ("USERPROFILE") & "\Downloads\"
+    Archivo = "Nonrec_Workingpaper.xlsx"
+    
+    ' 2) SOLICITAR CREDENCIALES CON VALIDACIÓN
+    usuario = InputBox("Ingrese su Usuario de SAP:", "Login SAP")
+    
+    ' Validamos si el usuario está vacío o canceló
+    If usuario = "" Then
+        MsgBox "Operación cancelada: El usuario es obligatorio.", vbCritical, "Error"
+        Exit Sub
+    End If
+    
+    password = InputBox("Ingrese su Contraseña de SAP:", "Login SAP")
+    
+    ' Validamos si la contraseña está vacía o canceló
+    If password = "" Then
+        MsgBox "Operación cancelada: La contraseña es obligatoria.", vbCritical, "Error"
+        Exit Sub
+    End If
+    
+    ' 3) CONEXIÓN A SAP GUI
+    On Error Resume Next
+    Set SapGuiAuto = GetObject("SAPGUI")
+    If SapGuiAuto Is Nothing Then
+        MsgBox "El programa SAP Logon no está abierto. Por favor, ábrelo primero.", vbCritical
+        Exit Sub
+    End If
+    
+    Set Application = SapGuiAuto.GetScriptingEngine
+    
+    ' Abrir la conexión específica (debe coincidir con el nombre en tu SAP Logon)
+    Set Connection = Application.OpenConnection("PRD - ECC Production", True)
+    
+    If Connection Is Nothing Then
+        MsgBox "No se pudo establecer la conexión 'PRD - ECC Production'. Revisa el nombre.", vbCritical
+        Exit Sub
+    End If
+    
+    Set Session = Connection.Children(0)
+    On Error GoTo 0
+    
+    ' 4) PROCESO DE LOGIN
+    Session.findById("wnd[0]/usr/txtRSYST-BNAME").Text = usuario
+    Session.findById("wnd[0]/usr/pwdRSYST-BCODE").Text = password
+    Session.findById("wnd[0]/usr/txtRSYST-MANDT").Text = "900"
+    Session.findById("wnd[0]/usr/txtRSYST-LANGU").Text = "EN"
+    Session.findById("wnd[0]").sendVKey 0 ' Presionar Enter
+    
+    ' Manejo de popups iniciales (como avisos de licencias o múltiples entradas)
+    On Error Resume Next
+    If Session.Children.Count > 1 Then
+        Session.findById("wnd[1]/tbar[0]/btn[0]").press
+    End If
+    On Error GoTo 0
+    
+    ' 5) NAVEGACIÓN A T-CODE FBL3N
+    Session.findById("wnd[0]/tbar[0]/okcd").Text = "/nFBL3N"
+    Session.findById("wnd[0]").sendVKey 0
+    
+    
+    
+    ' --- INICIO BLOQUE RANGOS DESDE EXCEL ---
+    Dim ws As Worksheet
+    Set ws = ThisWorkbook.Sheets("Macro")
+    ws.Activate
+    
+    ' 1. PARA CUENTAS (G/L Accounts)
+    ' Copiamos el rango de cuentas desde Excel (Columna B)
+    Dim ultimaFilaB As Long
+    ultimaFilaB = ws.Cells(ws.Rows.Count, "B").End(xlUp).Row
+    
+    ' Validamos que haya datos para copiar
+    If ultimaFilaB >= 4 Then
+        ws.Range("B4:B" & ultimaFilaB).Copy
+
+        ' Presionar flecha amarilla de Cuentas
+        Session.findById("wnd[0]/usr/btn%_SD_SAKNR_%_APP_%-VALU_PUSH").press
+        DoEvents
+    
+        ' Dentro de la ventana emergente:
+        Session.findById("wnd[1]/tbar[0]/btn[16]").press ' Borrar lista actual (Shift+F4)
+        Session.findById("wnd[1]/tbar[0]/btn[24]").press ' Pegar de portapapeles (Shift+F12)
+        Session.findById("wnd[1]/tbar[0]/btn[8]").press  ' Ejecutar/Confirmar (F8)
+        DoEvents
+     Else
+        MsgBox "No se encontraron cuentas en el rango B4:B" & ws.Rows.Count, vbExclamation
+        Exit Sub
+    End If
+
+    ' 2. PARA SOCIEDADES (Company Codes)
+    ' Copiamos el rango de sociedades desde Excel (Columna C)
+    Dim ultimaFilaD As Long
+    ultimaFilaD = ws.Cells(ws.Rows.Count, "D").End(xlUp).Row
+    
+    If ultimaFilaD >= 4 Then
+        ws.Range("D4:D" & ultimaFilaD).Copy
+        
+        ' Acceder a la flecha amarilla de Sociedades
+        Session.findById("wnd[0]/usr/btn%_SD_BUKRS_%_APP_%-VALU_PUSH").press
+        DoEvents
+        
+        Session.findById("wnd[1]/tbar[0]/btn[16]").press ' Borrar lista
+        Session.findById("wnd[1]/tbar[0]/btn[24]").press ' Pegar de portapapeles
+        Session.findById("wnd[1]/tbar[0]/btn[8]").press  ' Confirmar (F8)
+    End If
+
+    
+    'Forzar una pequeña espera para que SAP procese el cierre de las ventanas anteriores
+    DoEvents
+    VBA.Interaction.DoEvents
+
+    'Asegurar que estamos en la ventana principal
+    Session.findById("wnd[0]").SetFocus
+    DoEvents
+    
+    'Seleccionar "Open Items" (Partidas Abiertas)
+    ' Si radX_OPENT falla, intentamos con el ID alternativo de algunas versiones
+    On Error Resume Next
+    Session.findById("wnd[0]/usr/radX_OPENT").Select
+    If Err.Number <> 0 Then
+        Err.Clear
+        Session.findById("wnd[0]/usr/radX_AISEL").Select ' ID alternativo para All Items/Open Items
+    End If
+    On Error GoTo 0
+
+    'Ingresar la Fecha Clave (Key Date)
+    ' Usamos .SetFocus para asegurarnos de que SAP "vea" el campo antes de escribir
+    On Error Resume Next
+    With Session.findById("wnd[0]/usr/ctxtPA_STIDA")
+        .SetFocus
+        .Text = Format(ws.Range("F4").Value, "mm/dd/yyyy")
+    End With
+
+    ' Si hubo error buscando el ID de la fecha, usamos SendVKey para saltar campos
+    If Err.Number <> 0 Then
+        Err.Clear
+        ' A veces el campo se llama SO_STIDA o PA_STID
+        ' Intentamos buscar cualquier campo que acepte la fecha en esa zona
+        Session.ActiveWindow.sendVKey 0 ' Enter para refrescar
+    End If
+    On Error GoTo 0
+    
+    
+    ' Ejecutar reporte (F8)
+    Session.findById("wnd[0]").sendVKey 8
+    
+    ' VALIDACIÓN: ¿Hay datos o está vacío?
+    ' Esperamos un segundo a que SAP responda
+    Excel.Application.Wait (Now + TimeValue("00:00:02"))
+    
+    ' Leemos el mensaje de la barra de estado (StatusBar)
+    Dim mensajeSAP As String
+    mensajeSAP = Session.findById("wnd[0]/sbar").Text
+    
+    ' Si el mensaje dice que no hay datos, detenemos la macro con elegancia
+    If InStr(1, mensajeSAP, "No account fulfils", vbTextCompare) > 0 Or _
+       InStr(1, mensajeSAP, "No list generated", vbTextCompare) > 0 Then
+        MsgBox "? SAP dice: " & mensajeSAP & vbCrLf & _
+               "Verifica los filtros (Cuentas/Fechas) porque no hay información para procesar.", vbExclamation
+        Exit Sub
+    End If
+
+    
+    ' --- FIN BLOQUE RANGOS ---
+    
+    
+     ' --- EXPORTAR DATOS Y GUARDARLOS AUTOMATICAMENTE ---
+    Session.findById("wnd[0]/mbar/menu[0]/menu[3]/menu[1]").Select
+    
+    Excel.Application.Wait Now + TimeValue("00:00:02")
+    
+    Session.findById("wnd[1]/tbar[0]/btn[0]").press
+    
+    Excel.Application.Wait Now + TimeValue("00:00:02")
+    
+    Session.findById("wnd[1]/usr/ctxtDY_PATH").Text = Ruta
+    Session.findById("wnd[1]/usr/ctxtDY_FILENAME").Text = Archivo
+    
+    Session.findById("wnd[1]/tbar[0]/btn[11]").press
+    
+    MsgBox "? Archivo exportado correctamente: " & Ruta & Archivo, vbInformation
+    
+    DoEvents
+    
+
+    ' --- INICIO BLOQUE TABLA DINÁMICA ---
+    Dim wbData As Workbook
+    Dim wsData As Worksheet
+    Dim wsPivot As Worksheet
+    Dim pc As PivotCache
+    Dim pt As PivotTable
+    Dim campoValor As String
+    Dim lastRow As Long, lastCol As Long
+    
+    ' 1. Abrir el archivo y definir datos
+    Set wbData = Workbooks.Open(Ruta & Archivo)
+    Set wsData = wbData.Sheets(1)
+    
+    lastRow = wsData.Cells(wsData.Rows.Count, 1).End(xlUp).Row
+    lastCol = wsData.Cells(1, wsData.Columns.Count).End(xlToLeft).Column
+    
+    ' 2. Borrar la hoja "Analysis" si ya existe para evitar el error 1004
+    On Error Resume Next
+    Application.DisplayAlerts = False ' Desactiva el aviso de "¿Desea eliminar la hoja?"
+    wbData.Sheets("Analysis").Delete
+    Application.DisplayAlerts = True ' Lo activamos de nuevo
+    On Error GoTo 0
+
+    ' Ahora sí, crear la hoja con seguridad
+    Set wsPivot = wbData.Sheets.Add(After:=wbData.Sheets(wbData.Sheets.Count))
+    wsPivot.Name = "Analysis"
+    
+    ' 3. Crear el Cache y la Tabla
+    Set pc = wbData.PivotCaches.Create(SourceType:=xlDatabase, SourceData:=wsData.Range(wsData.Cells(1, 1), wsData.Cells(lastRow, lastCol)))
+    Set pt = pc.CreatePivotTable(TableDestination:=wsPivot.Range("B3"), TableName:="PivotSAP")
+    
+    ' 4. Configurar la tabla (Ajusta los nombres de columna entre comillas si tu SAP está en español)
+    ' Usualmente en FBL3N el importe es "Importe en moneda local" o similar
+    campoValor = "Amount in local currency"
+    
+    With pt
+        ' Añadir Cuenta a Filas (Opcional, ajusta el nombre del campo)
+        On Error Resume Next
+        .PivotFields("Text").Orientation = xlRowField
+        
+        ' Añadir Importe a Valores
+        With .PivotFields(campoValor)
+            .Orientation = xlDataField
+            .Function = xlSum
+            .NumberFormat = "#,##0.00"
+        End With
+        
+        ' 5. FILTRO: Valores diferentes de cero
+        ' Se aplica un filtro de valor a la fila para que solo muestre lo que no suma cero
+        .PivotFields("Text").PivotFilters.Add2 Type:=xlValueDoesNotEqual, DataField:=.PivotFields("Suma de " & campoValor), Value1:=0
+        On Error GoTo 0
+    End With
